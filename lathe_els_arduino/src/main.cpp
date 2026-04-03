@@ -10,7 +10,7 @@ int rotary_steps_left;
 int rotary_steps_right;
 int rotary_steps;
 int screw_pitch_e;
-
+float screw_pitch;
 //#include <RotaryEncoder.h>
 
 //pin declarations
@@ -21,18 +21,15 @@ const int met_thread_butt = 2;
 const int man_move_butt = 3;
 const int settings_butt = 4;
 //left and right digital stops
-const int l_stop_set_butt = 5;
-const int l_stop_clear_butt = 6;
-const int r_stop_set_butt = 7;
-const int r_stop_clear_butt = 8;
+const int l_stop_set_butt = 5; //if wired to a pysical switch as well this will serve as a physical stop button too.
+const int l_stop_clear_butt = 6; //serves as clear and rapid left
+const int r_stop_set_butt = 7; //if wired to a pysical switch as well this will serve as a physical stop button too.
+const int r_stop_clear_butt = 8; //serves as clear and rapid right
 //dro zero
 const int dro_zero = 9;
 //direction selction
 const int l_dir = 10;
 const int r_dir = 11;
-//physical stop limit switches
-const int r_stop_limit = A4;
-const int l_stop_limit = A5;
 //control rotary encoder pins and settings
 const int control_rotary_a = 12;
 const int control_rotary_b = 13;
@@ -42,18 +39,16 @@ int control_last_step = 0;
 int control_value = 0;
 int last_control_value = 0;
 float feed_rate = 0.001;
+float display_feed_rate = 0.001;
 //spindle speed rotary encoder pins
 const int spindle_rotary_a = A2; //A2 and A3 support interrupts, which is necessary for accurate reading of the rotary encoder at high speeds. If you change these, make sure to change the interrupt settings in the code as well.
 const int spindle_rotary_b = A3;
 
-//lcd pins
-const int lcd_sda = 17;
-const int lcd_scl = 18;
 //stepper pins
-const int stepper_1 = 19;
-const int stepper_2 = 20;
-const int stepper_3 = 21;
-const int stepper_4 = 22;
+const int stepper_1 = A0;
+const int stepper_2 = A1;
+const int stepper_3 = A4;
+const int stepper_4 = A5;
 
 const int mode_buttons[] = {
     feed_butt, 
@@ -61,6 +56,22 @@ const int mode_buttons[] = {
     met_thread_butt, 
     man_move_butt, 
     settings_butt 
+};
+
+const int other_buttons[] = {
+    l_dir,
+    r_dir,
+    control_rotary_a,
+    control_rotary_b,
+    l_stop_set_butt,
+    l_stop_clear_butt,
+    r_stop_set_butt,
+    r_stop_clear_butt,
+    dro_zero,
+    stepper_1,
+    stepper_2,
+    stepper_3,
+    stepper_4
 };
 
 const float in_threads[] = {
@@ -123,30 +134,25 @@ const float met_threads[] = {
 int met_thread_key = 7;
 int max_met_threads = 20;
 
+int feed_key = 6;
+
 String mode = "feed";
 String last_mode = "feed";
+String default_units;
 int mode_change = 0;
 
 int direction = 0;
+int last_direction = 0;
 
-const int other_buttons[] = {
-    l_dir,
-    r_dir,
-    control_rotary_a,
-    control_rotary_b,
-    l_stop_set_butt,
-    l_stop_clear_butt,
-    r_stop_set_butt,
-    r_stop_clear_butt,
-    dro_zero,
-    r_stop_limit,
-    l_stop_limit,
-};
+
 
 int rpm = 0;
-float l_stop_dist = -1.0;
-float r_stop_dist = 2.0;
+float l_stop_loc = -999.0;
+float r_stop_loc = 2.0;
 float dro_pos = 0.0;
+float last_dro_pos = 0.0;
+int stepper_rpm = 0;
+int rapid_rpm = 1000;
 
 byte matrix_array[8][12] = {
   { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
@@ -203,7 +209,7 @@ String read_mode(String last_mode){
     if (md == "none") {
         md = last_mode;
     }
-    Serial.println(("Mode: " + md));
+    //Serial.println(("Mode: " + md));
     return md;
 }
 
@@ -236,16 +242,16 @@ int rotary_read(int steps, int &position, int &last_state_a, int &last_step, int
 String screen_mode(String mode){
     String md;
     if (mode == "feed") {
-        md = "Feed Md";
+        md = "Feed Md ";
     }
     else if (mode == "in_thread") {
-        md = "In Thrd";
+        md = "IN Thrd ";
     }
     else if (mode == "met_thread") {
-        md = "MM Thread";
+        md = "MM Thrd ";
     }
     else if (mode == "man_move") {
-        md = "Move Md";
+        md = "Move Md ";
     }
     else if (mode == "settings") {
         md = "Settings";
@@ -255,90 +261,180 @@ String screen_mode(String mode){
     }
     return md;
 }
-
-void lcd_print(String mode, int rpm, float feed_rate, float l_stop_dist, float r_stop_dist, float dro_pos){
-    
-    String row2;
-    String row3;
-    String row4;
-    String row1 = screen_mode(mode) + " | RPM: " + String(rpm);
-    String ls;
-    String rs;
-    lcd.setCursor(0, 0);
-    lcd.print(row1);
-    if (mode == "feed"){
-        row2 = "Feed Rate: " + String(feed_rate, 3) + " IPR";
+String fill_string(String str, int length, String fill_char = " "){
+    while (str.length() < length) {
+        str = fill_char + str; // Prepend the fill character until length is reached
     }
-    else if (mode == "in_thread"){
-        row2 = "TPI: " + String(1.0 / feed_rate, 0) + " | " + String(feed_rate, 4) + " IPR";
-    }
-    else if (mode == "met_thread"){
-        row2 = "Thread Pitch: " + String(feed_rate, 2) + " MMR";
-    }
-    else if (mode == "man_move"){
-        row2 = "Movement Per Mark: " + String(feed_rate, 3) + " IN";
-    }
-    lcd.setCursor(0, 1);
-    lcd.print(row2);
-    if (l_stop_dist < 0) {
-        ls = "NA";
-    }
-    else if (l_stop_dist >= 0) {
-        ls = String(l_stop_dist, 3);
-    }
-    if (r_stop_dist < 0) {
-        rs = "NA";
-    }
-    else if (r_stop_dist >= 0) {
-        rs = String(r_stop_dist, 3);
-    }
-    row3 = "<- " + ls + " | " + rs + " ->";
-    lcd.setCursor(0, 2);
-    lcd.print(row3);
-    row4 = "Screw DRO: " + String(dro_pos, 3);
-    lcd.setCursor(0, 3);
-    lcd.print(row4);
+    return str;
 }
 
-void auto_move(String mode,int step_size, int max_val, int &key_val, const float list_of_vals[] = {}){
+void lcd_print(String lcd_print_mode = "normal"){  
+    if (lcd_print_mode == "normal") {
+        String row2;
+        String row4;
+        String row1 = screen_mode(mode) + " | RPM: " + fill_string(String(rpm), 4, " ");
+        String ls;
+        String rs;
+        lcd.setCursor(0, 0);
+        lcd.print(row1);
+        if (mode == "feed"){
+            row2 = "Feed Rt: " + String(display_feed_rate, 3) + " " + default_units + "/R";
+        }
+        else if (mode == "in_thread"){
+            row2 = "TPI: " + String(1.0 / display_feed_rate, 0) + " | " + String(display_feed_rate, 4) + " I/R";
+        }
+        else if (mode == "met_thread"){
+            row2 = "Pitch: " + String(display_feed_rate, 2) + " MM/R";
+        }
+        else if (mode == "man_move"){
+            row2 = "Speed: " + String(display_feed_rate, 3) + " " + default_units + "/L";
+        }
+        lcd.setCursor(0, 1);
+        lcd.print(row2);
+        if (l_stop_loc <= -999) {
+            ls = "NA";
+        }
+        else {
+            ls = String(l_stop_loc, 3);
+        }
+        if (r_stop_loc <= -999) {
+            rs = "NA";
+        }
+        else {
+            rs = String(r_stop_loc, 3);
+        }
+        lcd.setCursor(0, 2);
+        lcd.print("< " + ls);
+        lcd.setCursor(11, 2);
+        lcd.print(fill_string(rs, 7, " ") + " >");
+        row4 = "Screw DRO:" + fill_string(String(dro_pos, 3), 7, " ") + " " + default_units;
+        lcd.setCursor(0, 3);
+        lcd.print(row4);
+    }
+    else if (lcd_print_mode == "fast"){
+        //only update the parts of the LCD that change frequently, like the DRO position, to reduce flickering and improve performance.
+        lcd.setCursor(10, 3);
+        lcd.print(fill_string(String(dro_pos, 3), 7, " "));
+    }
+}
+
+int read_spindle_speed(){
+    //read the spindle speed from the spindle rotary encoder and update the rpm variable. Use interrupts for accurate reading at high speeds.
+    
+    return rpm;
+}
+
+int calculate_stepper_rpm(){
+    //calculate the appropriate stepper motor speed based on feed rate, spindle speed, and screw_pitch.
+    //set as stepper_rpm when called
+    return (feed_rate * rpm) / screw_pitch;
+}
+
+void set_stepper_speed(int stepper_rpm, int direction = 0){
+    //set the stepper motor speed based on the feed rate and spindle speed. This will involve calculating the appropriate delay between steps to achieve the desired feed rate at the current spindle speed.
+    int delete_me = 0;
+}
+
+void feed_rate_calc(int key_val, const float list_of_vals[] = {}){
+    //calculate the feed rate based on the current mode and control value. In feed mode, the feed rate is directly proportional to the control value. In thread modes, the feed rate is determined by the selected thread pitch.
+    if (mode == "feed") {
+        display_feed_rate = control_value * 0.001; //convert to in/rev
+        feed_rate = display_feed_rate;
+    }
+    else if (mode == "in_thread") {
+        display_feed_rate = list_of_vals[key_val];
+        feed_rate = display_feed_rate;
+    }
+    else if (mode == "met_thread") {
+        display_feed_rate = list_of_vals[key_val];
+        feed_rate = display_feed_rate/25.4; //convert to in/rev
+    }
+}
+
+void auto_move(int step_size, int max_val, int &key_val, const float list_of_vals[] = {}){
     //move the lathe at the specified feed rate in the specified direction until a stop button is pressed or a stop limit switch is triggered. If in thread mode, also monitor the spindle speed and adjust the feed rate to maintain the correct thread pitch.
     if (direction == 0) {
+        // stop all stepper movement
+        set_stepper_speed(0);
+        //act if the mode changed since the last loop
         if (mode_change) {
+            rpm = read_spindle_speed();
             last_control_value = key_val;
             control_value = key_val;
+            //Serial.println("Mode changed to " + mode + " Control Value: " + String(control_value));
             control_pos = 0;
             control_last_state_a = digitalRead(control_rotary_a);
             control_last_step = 0;
-            if (mode == "feed") {
-                feed_rate = control_value * 0.001; //convert to in/rev
+            feed_rate_calc(key_val, list_of_vals);
+            lcd.clear();
+        }
+        //rotary jumps through thread pitches, and the LCD displays the current TPI and feed rate
+        rotary_read(step_size, control_pos, control_last_state_a, control_last_step, control_value);
+        if (control_value != last_control_value || mode_change == 1) {
+            if (control_value < 0) {
+                control_value = max_val;
             }
-            else {
-                feed_rate = list_of_vals[key_val];
+            else if (control_value > max_val) {
+                control_value = 0;
             }
-            Serial.println("Auto Move Mode: " + mode);
-            lcd_print(mode, rpm, feed_rate, l_stop_dist, r_stop_dist, dro_pos);
+            key_val = control_value;
+            feed_rate_calc(key_val, list_of_vals);
+            last_control_value = control_value;
+            lcd_print();
+        }
+        //set and clear digital stops
+          if (digitalRead(l_stop_set_butt) == LOW) {
+              l_stop_loc = dro_pos;
+              lcd_print();
+          }
+          if (digitalRead(l_stop_clear_butt) == LOW) {
+              l_stop_loc = -999.0;
+              lcd_print();
+          }
+          if (digitalRead(r_stop_set_butt) == LOW) {
+              r_stop_loc = dro_pos;
+              lcd_print();
+          }
+          if (digitalRead(r_stop_clear_butt) == LOW) {
+              r_stop_loc = -999.0;
+              lcd_print();
+          }
+        //clear the DRO position when the DRO zero button is pressed
+         if (digitalRead(dro_zero) == LOW) {
+            last_dro_pos = dro_pos;
+            l_stop_loc = l_stop_loc - dro_pos;
+            r_stop_loc = r_stop_loc - dro_pos;
+            dro_pos = 0.0;
+            lcd_print();
+        }
+    }
+    else {
+        //monitor stop buttons and stop limits
+        if (digitalRead(l_stop_set_butt) == LOW || digitalRead(r_stop_set_butt) == LOW || l_stop_loc <= dro_pos || r_stop_loc >= dro_pos) {
+            //stop the movement
+            set_stepper_speed(0);
+            Serial.println("Stop button pressed or stop limit reached. Stopping movement.");
+        }
+        //monitor rapid buttons (clear stop buttons)
+        else if (digitalRead(l_stop_clear_butt) == LOW){
+            //Rapid Speed left
+            set_stepper_speed(rapid_rpm, -1);
+            Serial.println("Rapid Left button pressed. Use rapid_rpm speed");
+        }
+        else if (digitalRead(r_stop_clear_butt) == LOW) {
+            //Rapid Speed right
+            set_stepper_speed(rapid_rpm, 1);
+            Serial.println("Rapid Right button pressed. Use rapid_rpm speed");
         }
         else {
-            //rotary jumps through thread pitches, and the LCD displays the current TPI and feed rate
-            rotary_read(5, control_pos, control_last_state_a, control_last_step, control_value);
-            if (control_value != last_control_value) {
-                if (control_value < 0) {
-                    control_value = max_val;
-                }
-                else if (control_value > max_val) {
-                    control_value = 0;
-                }
-                key_val = control_value;
-                if (mode == "feed") {
-                    feed_rate = control_value * 0.001; //convert to in/rev
-                }
-                else {
-                    feed_rate = list_of_vals[control_value];
-                }
-                last_control_value = control_value;
-                lcd_print(mode, rpm, feed_rate, l_stop_dist, r_stop_dist, dro_pos);
-            }
+            //no rapid buttons pressed, use normal feed rate
+            //read speed
+            rpm = read_spindle_speed();
+            //set stepper speed and direction
+            set_stepper_speed(rpm, direction);
+            
         }
+        
     }
 }
 
@@ -353,13 +449,13 @@ void setup() {
         int int_default_units = EEPROM.read(0);
     }
     if (int_default_units == 0) {
-        String default_units = "IN";
+        default_units = "IN";
     }
     else if (int_default_units == 1) {
-        String default_units = "MM";
+        default_units = "MM";
     }
     else if (int_default_units == 2) {
-        String default_units = "CM";
+        default_units = "CM";
     }
     if (EEPROM.read(1) == 255) {
         //values have been stored, read them
@@ -381,7 +477,7 @@ void setup() {
     else {
         int screw_pitch_e = EEPROM.read(3);
     }
-    float screw_pitch = screw_pitch_e /1000.0; //convert to in/rev
+    screw_pitch = screw_pitch_e /1000.0; //convert to in/rev
     // initialize control rotary encoder variables
 
 
@@ -401,6 +497,7 @@ void setup() {
     matrix.begin();
     lcd.init();  // initialize the lcd
     lcd.backlight();
+    lcd_print();
     Serial.begin(9600);
     
 }
@@ -409,80 +506,42 @@ void loop(){
 
     
     // Mode selection
-    mode = read_mode(mode);
-    if (mode != last_mode) {
-        last_mode = mode;
-        mode_change = 1;
+    if (direction == 0) {
+        mode = read_mode(mode);
+        if (mode != last_mode) {
+            last_mode = mode;
+            mode_change = 1;
+        }
+        else {
+            mode_change = 0;
+        }
     }
-    else {
-        mode_change = 0;
-    }
-
     if (mode == "feed") {
         //feed mode selected
-        lcd_print(mode, rpm, feed_rate, l_stop_dist, r_stop_dist, dro_pos);
-        if (direction == 0) {
-            //rotary jumps through feed rates, and the LCD displays the current feed rate
-            //increments in .001 in/rev if in inches or .01 mm/rev if in metric
-            rotary_read(1, control_pos, control_last_state_a, control_last_step, control_value);
-            if (control_value < 1) {
-                control_value = 1;
-            }
-            else if (control_value > 1000) {
-                control_value = 1000;
-            }
-            feed_rate = control_value * 0.001; //convert to in/rev
-            
-        }
+        auto_move(5, 1000, feed_key);
     }
     else if (mode == "in_thread") {
         //Serial.println("In Thread Mode");
-        if (direction == 0) {
-            if (mode_change) {
-                control_value = in_thread_key;
-                control_pos = 0;
-                control_last_state_a = digitalRead(control_rotary_a);
-                control_last_step = 0;
-            }
-            //rotary jumps through thread pitches, and the LCD displays the current TPI and feed rate
-            rotary_read(5, control_pos, control_last_state_a, control_last_step, control_value);
-            if (control_value < 0) {
-                control_value = max_in_threads;
-            }
-            else if (control_value > max_in_threads) {
-                control_value = 0;
-            }
-            in_thread_key = control_value;
-        }
-        if (mode_change) {
-            feed_rate = in_threads[13];
-        }
-        lcd_print(mode, rpm, in_threads[in_thread_key], l_stop_dist, r_stop_dist, dro_pos);
-
+        auto_move(20, max_in_threads, in_thread_key, in_threads);
     }
     else if (mode == "met_thread") {
       //Serial.println(" Metric Thread Mode");
-        //auto_move(mode, 5, max_met_threads, met_thread_key, met_threads);
-        Serial.println("Metric Thread Mode");
-         
+        auto_move(20, max_met_threads, met_thread_key, met_threads);
     }
     else if (mode == "man_move") {
-        matrix_array[0][0] = 0;
-        matrix_array[0][1] = 0;
-        matrix_array[0][2] = 0;
-        matrix_array[0][3] = 1;
-        matrix_array[0][4] = 0;
+        Serial.println(" Manual Move Mode");
     }
     else if (mode == "settings") {
-        matrix_array[0][0] = 0;
-        matrix_array[0][1] = 0;
-        matrix_array[0][2] = 0;
-        matrix_array[0][3] = 0;
-        matrix_array[0][4] = 1;
+        Serial.println(" Settings Mode");
     }
 
     // Direction selection
     direction = read_dir(l_dir, r_dir);
+    if (direction != last_direction) {
+        last_direction = direction;
+        rpm = read_spindle_speed();
+        lcd_print();
+    }
     if (direction == -1) {
         matrix_array[7][9] = 1;
         matrix_array[7][10] = 0;
