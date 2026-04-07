@@ -134,6 +134,19 @@ const float met_threads[] = {
 int met_thread_key = 7;
 int max_met_threads = 20;
 
+const float man_feed_rates[] = {
+    0.0005,
+    0.001,  
+    0.005,
+    0.010,
+    0.050,
+    0.100,
+};
+int man_feed_key = 1;
+int max_man_feed_key = 5;
+float man_feed_speed = man_feed_rates[man_feed_key];
+float man_move_dist = 0;
+int man_move_val = 0;
 int feed_key = 6;
 
 String mode = "feed";
@@ -213,8 +226,29 @@ String read_mode(String last_mode){
     return md;
 }
 
-int rotary_read(int steps, int &position, int &last_state_a, int &last_step, int &value){
-    //int pin_a = control_rotary_a
+int control_rotary_read(){
+    int current_state_a = digitalRead(control_rotary_a);
+    int movement;
+    if (current_state_a != control_last_state_a) {
+        if (digitalRead(control_rotary_b) != current_state_a) {
+            movement = 1;
+        }
+        else {
+            movement = -1;
+        }
+    }
+    control_last_state_a = current_state_a;
+    return movement;
+    delay(30);
+}
+
+int rotary_step_read(int steps, int &position, int &last_state_a, int &last_step, int &value){
+    //This function reads the rotary encoder and converts the readings into output values. It can change what size the step is before the output changes.
+    //Step is how many clicks create one change in output
+    //position is where the encoder is now - this tracks changes between steps
+    //last_state_a is to track when the state has changed
+    //last_step is the value when the last step was hit - used to calculate when the steps have been hit
+    //value is the output value
     int current_state_a = digitalRead(control_rotary_a);
     if (current_state_a != last_state_a) {
         if (digitalRead(control_rotary_b) != current_state_a) {
@@ -287,7 +321,7 @@ void lcd_print(String lcd_print_mode = "normal"){
             row2 = "Pitch: " + String(display_feed_rate, 2) + " MM/R";
         }
         else if (mode == "man_move"){
-            row2 = "Speed: " + String(display_feed_rate, 3) + " " + default_units + "/L";
+            row2 = "Speed: " + String(man_feed_speed, 4) + " " + default_units + "/C";
         }
         lcd.setCursor(0, 1);
         lcd.print(row2);
@@ -369,7 +403,7 @@ void auto_move(int step_size, int max_val, int &key_val, const float list_of_val
             lcd.clear();
         }
         //rotary jumps through thread pitches, and the LCD displays the current TPI and feed rate
-        rotary_read(step_size, control_pos, control_last_state_a, control_last_step, control_value);
+        rotary_step_read(step_size, control_pos, control_last_state_a, control_last_step, control_value);
         if (control_value != last_control_value || mode_change == 1) {
             if (control_value < 0) {
                 control_value = max_val;
@@ -385,10 +419,12 @@ void auto_move(int step_size, int max_val, int &key_val, const float list_of_val
         //set and clear digital stops
           if (digitalRead(l_stop_set_butt) == LOW) {
               l_stop_loc = dro_pos;
+              lcd.clear();
               lcd_print();
           }
           if (digitalRead(l_stop_clear_butt) == LOW) {
               l_stop_loc = -999.0;
+              lcd.clear();
               lcd_print();
           }
           if (digitalRead(r_stop_set_butt) == LOW) {
@@ -408,6 +444,7 @@ void auto_move(int step_size, int max_val, int &key_val, const float list_of_val
             lcd_print();
         }
     }
+    // directions are selected efficiently read and move
     else {
         //monitor stop buttons and stop limits
         if (digitalRead(l_stop_set_butt) == LOW || digitalRead(r_stop_set_butt) == LOW || l_stop_loc <= dro_pos || r_stop_loc >= dro_pos) {
@@ -437,6 +474,47 @@ void auto_move(int step_size, int max_val, int &key_val, const float list_of_val
         
     }
 }
+
+void man_move(){
+    //manual movement mode, where the feed rate is directly controlled by the rotary encoder and the
+    if (direction == 0) {
+          // stop all stepper movement
+          set_stepper_speed(0);
+          if (mode_change) {
+              rpm = read_spindle_speed();
+              control_last_state_a = digitalRead(control_rotary_a);
+              control_last_step = 0;
+              lcd.clear();
+          }
+          //set click increments
+          if (digitalRead(man_move_butt) == LOW){
+              man_feed_key ++;
+              if (man_feed_key > max_man_feed_key) {
+                  man_feed_key = 0;
+              }
+              else if (man_feed_key < 0) {
+                  man_feed_key = max_man_feed_key;
+              }
+              man_feed_speed = man_feed_rates[man_feed_key];
+              delay(100);
+          }
+
+          lcd_print();
+          //read the rotary encoder to move the stepper manually.
+          int temp_val = 0;
+          int temp_control_value = 0;
+          man_move_val = rotary_read(2, control_pos, control_last_state_a, control_last_step, temp_control_value);
+          man_move_dist = man_move_val * man_feed_speed;
+          Serial.println("Man move val: " + String(man_move_val) + " Man move dist: " + String(man_move_dist) + " Control Pos: " + String(control_pos) + " Control Last Step: " + String(control_last_step));
+          if (man_move_val != 0) {
+              //move the stepper the appropriate distance as fast as possible
+              //probably need a manual move function
+              Serial.println('moved ' + String(man_feed_speed));
+              //Serial.println('control_pos'+String(control_pos));
+              man_move_dist = 0;
+          }
+    }
+  }
 
 void setup() {
     //get stored variables from EEPROM
@@ -529,7 +607,7 @@ void loop(){
         auto_move(20, max_met_threads, met_thread_key, met_threads);
     }
     else if (mode == "man_move") {
-        Serial.println(" Manual Move Mode");
+        man_move();
     }
     else if (mode == "settings") {
         Serial.println(" Settings Mode");
