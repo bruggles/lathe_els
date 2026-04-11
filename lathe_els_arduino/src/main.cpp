@@ -5,12 +5,17 @@ ArduinoLEDMatrix matrix;
 #include <LiquidCrystal_I2C.h>
 LiquidCrystal_I2C lcd(0x27, 30, 4);
 #include <EEPROM.h>
-int int_default_units;
 int rotary_steps_left;
 int rotary_steps_right;
 int rotary_steps;
-int screw_pitch_e;
-float screw_pitch;
+
+String mode = "feed";
+String last_mode = "feed";
+
+int mode_change = 0;
+
+int direction = 0;
+int last_direction = 0;
 //#include <RotaryEncoder.h>
 
 //pin declarations
@@ -31,8 +36,10 @@ const int dro_zero = 9;
 const int l_dir = 10;
 const int r_dir = 11;
 //control rotary encoder pins and settings
-const int control_rotary_a = 12;
-const int control_rotary_b = 13;
+//const int control_rotary_a = 12;
+const int l_move = 12;
+//const int control_rotary_b = 13;
+const int r_move = 13;
 int control_pos = 0;
 int control_last_state_a = 0; 
 int control_last_step = 0; 
@@ -61,8 +68,10 @@ const int mode_buttons[] = {
 const int other_buttons[] = {
     l_dir,
     r_dir,
-    control_rotary_a,
-    control_rotary_b,
+    //control_rotary_a,
+    //control_rotary_b,
+    l_move,
+    r_move,
     l_stop_set_butt,
     l_stop_clear_butt,
     r_stop_set_butt,
@@ -149,15 +158,41 @@ float man_move_dist = 0;
 int man_move_val = 0;
 int feed_key = 6;
 
-String mode = "feed";
-String last_mode = "feed";
+int int_screw_pitch;
+float screw_pitch;
+int int_reverse_feed;
+int int_default_units;
 String default_units;
-int mode_change = 0;
+int int_stepper_ratio;
+int int_rot_enc_steps_hund;
+//const String menu_items[] = {"Default Units", "Screw Pitch", "Reverse Direction"};
+const char* du_options[] = {"IN","MM","CM"};
+const char* sp_options[] = {"float_div_thou"};
+const char* rd_options[] = {"T","F"};
+const char* sr_options[] = {"int"};
+const char* ir_options[] = {"int_mult_hundred"};
 
-int direction = 0;
-int last_direction = 0;
+struct MenuVars {
+  const char* title;
+  int* variable; // Use void* to store pointers to different types
+  const char** options; // Options for the menu
+  int max_option;   // Length of the options array
+  int default_key;
+  int eeprom_start;
+  int eeprom_end;
+};
 
+MenuVars menu_vars[] = {
+    //{"Title", $variable_to_change, {options}, max_index_of_options}
+    {"Default Units", &int_default_units, du_options, 2, 0, 0, 0},
+    {"Screw Pitch", &int_screw_pitch, sp_options, 250, 100, 1, 1},   
+    {"Reverse Screw", &int_reverse_feed, rd_options, 1, 1, 2, 2},  
+    {"Step Ratio", &int_stepper_ratio, sr_options, 100, 5, 3, 3},
+    {"Encode Steps", &int_rot_enc_steps_hund, ir_options, 20, 6, 4, 4}
+};
 
+int menu_key = 0;
+int max_menu_key = 4;
 
 int rpm = 0;
 float l_stop_loc = -999.0;
@@ -167,16 +202,6 @@ float last_dro_pos = 0.0;
 int stepper_rpm = 0;
 int rapid_rpm = 1000;
 
-byte matrix_array[8][12] = {
-  { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-  { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-  { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-  { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-  { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-  { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-  { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
-  { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
-};
 
 int read_dir(int left_dir_button, int right_dir_button){
     int dir;
@@ -226,49 +251,42 @@ String read_mode(String last_mode){
     return md;
 }
 
-int control_rotary_read(){
-    int current_state_a = digitalRead(control_rotary_a);
-    int movement;
-    if (current_state_a != control_last_state_a) {
-        if (digitalRead(control_rotary_b) != current_state_a) {
-            movement = 1;
-        }
-        else {
-            movement = -1;
-        }
-    }
-    control_last_state_a = current_state_a;
-    return movement;
-    delay(30);
-}
+// int control_rotary_read(){
+//     int current_state_a = digitalRead(control_rotary_a);
+//     int movement = 0;
+//     if (current_state_a != control_last_state_a) {
+//         if (digitalRead(control_rotary_b) != current_state_a) {
+//             movement = 1;
+//         }
+//         else {
+//             movement = -1;
+//         }
+//     }
+//     control_last_state_a = current_state_a;
+//     return movement;
+//     delay(50);
+// }
 
-int rotary_step_read(int steps, int &position, int &last_state_a, int &last_step, int &value){
+int rotary_step_read(int steps, int &position, int &last_step, int &value){
     //This function reads the rotary encoder and converts the readings into output values. It can change what size the step is before the output changes.
     //Step is how many clicks create one change in output
     //position is where the encoder is now - this tracks changes between steps
     //last_state_a is to track when the state has changed
     //last_step is the value when the last step was hit - used to calculate when the steps have been hit
     //value is the output value
-    int current_state_a = digitalRead(control_rotary_a);
-    if (current_state_a != last_state_a) {
-        if (digitalRead(control_rotary_b) != current_state_a) {
-            position++;
-            //Serial.println("plus");
-            if (position >= last_step + steps) {
-                value++;
-                last_step = position;
-            }
-        }
-        else {
-            position--;
-            //Serial.println("minus");
-            if (position <= last_step - steps) {
-                value--;
-                last_step = position;
-            }
-        }
+    int movement = read_dir(l_move,r_move);
+    //control_rotary_read();
+    position += movement;
+    
+    if (position >= last_step + steps) {
+        value++;
+        last_step = position;
     }
-    last_state_a = current_state_a;
+    else if (position <= last_step - steps) {
+        value--;
+        last_step = position;
+    }
+    delay(50);
     //Serial.println("value: " + String(value));
     return value;
 }
@@ -385,6 +403,36 @@ void feed_rate_calc(int key_val, const float list_of_vals[] = {}){
     }
 }
 
+void set_clear_stops_dro(){
+    //set and clear digital stops
+    if (digitalRead(l_stop_set_butt) == LOW) {
+        l_stop_loc = dro_pos;
+        lcd.clear();
+        lcd_print();
+    }
+    if (digitalRead(l_stop_clear_butt) == LOW) {
+        l_stop_loc = -999.0;
+        lcd.clear();
+        lcd_print();
+    }
+    if (digitalRead(r_stop_set_butt) == LOW) {
+        r_stop_loc = dro_pos;
+        lcd_print();
+    }
+    if (digitalRead(r_stop_clear_butt) == LOW) {
+        r_stop_loc = -999.0;
+        lcd_print();
+    }
+    //clear the DRO position when the DRO zero button is pressed
+    if (digitalRead(dro_zero) == LOW) {
+      last_dro_pos = dro_pos;
+      l_stop_loc = l_stop_loc - dro_pos;
+      r_stop_loc = r_stop_loc - dro_pos;
+      dro_pos = 0.0;
+      lcd_print();
+  }
+}
+
 void auto_move(int step_size, int max_val, int &key_val, const float list_of_vals[] = {}){
     //move the lathe at the specified feed rate in the specified direction until a stop button is pressed or a stop limit switch is triggered. If in thread mode, also monitor the spindle speed and adjust the feed rate to maintain the correct thread pitch.
     if (direction == 0) {
@@ -397,16 +445,19 @@ void auto_move(int step_size, int max_val, int &key_val, const float list_of_val
             control_value = key_val;
             //Serial.println("Mode changed to " + mode + " Control Value: " + String(control_value));
             control_pos = 0;
-            control_last_state_a = digitalRead(control_rotary_a);
+            //control_last_state_a = digitalRead(control_rotary_a);
             control_last_step = 0;
             feed_rate_calc(key_val, list_of_vals);
             lcd.clear();
         }
         //rotary jumps through thread pitches, and the LCD displays the current TPI and feed rate
-        rotary_step_read(step_size, control_pos, control_last_state_a, control_last_step, control_value);
+        rotary_step_read(step_size, control_pos, control_last_step, control_value);
         if (control_value != last_control_value || mode_change == 1) {
             if (control_value < 0) {
                 control_value = max_val;
+            }
+            else if ((mode == "feed") && (control_value > max_val || control_value == 0)){
+                control_value = 1;
             }
             else if (control_value > max_val) {
                 control_value = 0;
@@ -416,33 +467,7 @@ void auto_move(int step_size, int max_val, int &key_val, const float list_of_val
             last_control_value = control_value;
             lcd_print();
         }
-        //set and clear digital stops
-          if (digitalRead(l_stop_set_butt) == LOW) {
-              l_stop_loc = dro_pos;
-              lcd.clear();
-              lcd_print();
-          }
-          if (digitalRead(l_stop_clear_butt) == LOW) {
-              l_stop_loc = -999.0;
-              lcd.clear();
-              lcd_print();
-          }
-          if (digitalRead(r_stop_set_butt) == LOW) {
-              r_stop_loc = dro_pos;
-              lcd_print();
-          }
-          if (digitalRead(r_stop_clear_butt) == LOW) {
-              r_stop_loc = -999.0;
-              lcd_print();
-          }
-        //clear the DRO position when the DRO zero button is pressed
-         if (digitalRead(dro_zero) == LOW) {
-            last_dro_pos = dro_pos;
-            l_stop_loc = l_stop_loc - dro_pos;
-            r_stop_loc = r_stop_loc - dro_pos;
-            dro_pos = 0.0;
-            lcd_print();
-        }
+        set_clear_stops_dro();
     }
     // directions are selected efficiently read and move
     else {
@@ -469,7 +494,6 @@ void auto_move(int step_size, int max_val, int &key_val, const float list_of_val
             rpm = read_spindle_speed();
             //set stepper speed and direction
             set_stepper_speed(rpm, direction);
-            
         }
         
     }
@@ -482,9 +506,10 @@ void man_move(){
           set_stepper_speed(0);
           if (mode_change) {
               rpm = read_spindle_speed();
-              control_last_state_a = digitalRead(control_rotary_a);
+              //control_last_state_a = digitalRead(control_rotary_a);
               control_last_step = 0;
               lcd.clear();
+              lcd_print();
           }
           //set click increments
           if (digitalRead(man_move_butt) == LOW){
@@ -496,70 +521,155 @@ void man_move(){
                   man_feed_key = max_man_feed_key;
               }
               man_feed_speed = man_feed_rates[man_feed_key];
+              lcd_print();
               delay(100);
           }
 
-          lcd_print();
+          
           //read the rotary encoder to move the stepper manually.
           int temp_val = 0;
           int temp_control_value = 0;
-          man_move_val = rotary_read(2, control_pos, control_last_state_a, control_last_step, temp_control_value);
+          man_move_val = read_dir(l_move,r_move);
           man_move_dist = man_move_val * man_feed_speed;
-          Serial.println("Man move val: " + String(man_move_val) + " Man move dist: " + String(man_move_dist) + " Control Pos: " + String(control_pos) + " Control Last Step: " + String(control_last_step));
+          Serial.println("Man move val: " + String(man_move_val) + " Man move dist: " + String(man_move_dist) + " Feed Speed: " + String(man_feed_speed));
           if (man_move_val != 0) {
               //move the stepper the appropriate distance as fast as possible
               //probably need a manual move function
-              Serial.println('moved ' + String(man_feed_speed));
+              Serial.println("moved " + String(man_feed_speed));
               //Serial.println('control_pos'+String(control_pos));
               man_move_dist = 0;
+              lcd_print();
           }
+          set_clear_stops_dro();
     }
-  }
+}
+
+
+
+void read_eeprom(){
+    int eeprom_val;
+    for (int i = 0; i<= max_menu_key; i++){
+        if (menu_vars[i].eeprom_start == menu_vars[i].eeprom_end){
+            eeprom_val = EEPROM.read(menu_vars[i].eeprom_start);
+            if(eeprom_val == 255){
+                EEPROM.update(menu_vars[i].eeprom_start, menu_vars[i].default_key); 
+                *menu_vars[i].variable = menu_vars[i].default_key;
+            }
+            else{
+                *menu_vars[i].variable = eeprom_val;
+            }
+        }
+        //need an else here if we get longer values
+        if (i == 0){
+            default_units = String(menu_vars[i].options[*(static_cast<int*>(menu_vars[i].variable))]);
+        }
+    }
+}
+
+void write_eeprom(){
+    int eeprom_val;
+    for (int i = 0; i<= max_menu_key; i++){
+        if (menu_vars[i].eeprom_start == menu_vars[i].eeprom_end){
+            EEPROM.update(menu_vars[i].eeprom_start, *menu_vars[i].variable);
+        }
+        //need an else here if we get longer values
+        if (i == 0){
+            default_units = String(menu_vars[i].options[*(static_cast<int*>(menu_vars[i].variable))]);
+        }
+    }
+}
+
+void menu_lcd_print(){
+    lcd.clear();
+    int i_start = 0;
+    String str_variable_val;
+    String first_menu_look_val;
+    if (menu_key > 3){
+        i_start = menu_key - 3;
+    }
+    int max_internal_menu_key = min(i_start + 3,max_menu_key);
+    for (int i = i_start; i<= max_internal_menu_key; i++){
+        lcd.setCursor(2,i-i_start);
+        first_menu_look_val = String(menu_vars[i].options[0]);
+        Serial.println("style: "+ first_menu_look_val);
+        if (first_menu_look_val == "float_div_thou") { // Assuming menu_key 1 corresponds to a float variable
+            str_variable_val = String(*(static_cast<int*>(menu_vars[i].variable)) * 0.001,3);
+        } else if (first_menu_look_val == "int"){
+            str_variable_val = String(*(static_cast<int*>(menu_vars[i].variable)));
+        } else if (first_menu_look_val == "int_mult_hundred"){
+            str_variable_val = String(*(static_cast<int*>(menu_vars[i].variable)) * 100);
+        } else { // Assuming other keys correspond to int or String variables
+            str_variable_val = String(menu_vars[i].options[*(static_cast<int*>(menu_vars[i].variable))]);
+        }
+        //Serial.println(menu_vars[i].title);
+        lcd.print(String(menu_vars[i].title) + ": " + str_variable_val);
+        Serial.println(String(menu_vars[i].title) + ": " + str_variable_val);
+    }
+    for (int j = i_start; j<=max_internal_menu_key; j++){
+        if (j == menu_key){
+            lcd.setCursor(0,j-i_start);
+            lcd.print("->");
+        }
+        else {
+            lcd.setCursor(0,j-i_start);
+            lcd.print("  ");
+        }
+    }
+}
+
+
+
+void menu(){
+    int rot_rd = 0;
+    int menu_next_key;
+    set_stepper_speed(0);
+    if (mode_change) {
+        //control_last_state_a = digitalRead(control_rotary_a);
+        //control_last_step = 0;
+        lcd.clear();
+        menu_lcd_print();
+    }
+  
+    if (digitalRead(settings_butt) == LOW){
+        menu_key ++;
+        if (menu_key > max_menu_key) {
+            menu_key = 0;
+        }
+        else if (menu_key < 0) {
+            menu_key = max_menu_key;
+        }
+        menu_lcd_print();
+        delay(100);
+    }
+    int next_key_value = *menu_vars[menu_key].variable;
+    rot_rd = read_dir(l_move,r_move);
+    if (rot_rd != 0){
+        Serial.println(String(rot_rd) + " original_value: " + String(next_key_value));
+        next_key_value += rot_rd;
+        Serial.println("new_value: " + String(next_key_value));
+        if (next_key_value > menu_vars[menu_key].max_option){
+            *menu_vars[menu_key].variable = 0;
+        }
+        else if (next_key_value < 0){
+            *menu_vars[menu_key].variable = menu_vars[menu_key].max_option;
+        }
+        else {
+            *menu_vars[menu_key].variable = next_key_value;
+        }
+        menu_lcd_print();
+        delay(50);
+    } 
+    //screw_pitch
+    //reverse_feed
+    //default_units
+
+}
+
 
 void setup() {
     //get stored variables from EEPROM
-    if (EEPROM.read(0) == 255) {
-        //values have been stored, read them
-        int int_default_units = 0;
-        EEPROM.update(0, int_default_units);
-    }
-    else {
-        int int_default_units = EEPROM.read(0);
-    }
-    if (int_default_units == 0) {
-        default_units = "IN";
-    }
-    else if (int_default_units == 1) {
-        default_units = "MM";
-    }
-    else if (int_default_units == 2) {
-        default_units = "CM";
-    }
-    if (EEPROM.read(1) == 255) {
-        //values have been stored, read them
-        int rotary_steps_left = 6;
-        int rotary_steps_right = 0;
-        EEPROM.update(1, rotary_steps_left);
-        EEPROM.update(2, rotary_steps_right);
-    }
-    else {
-        int rotary_steps_left = EEPROM.read(1);
-        int rotary_steps_right = EEPROM.read(2);
-    }
-    int rotary_steps = rotary_steps_left * 100 + rotary_steps_right;
-    if (EEPROM.read(3) == 255) {
-        //values have been stored, read them
-        int screw_pitch_e = 100;
-        EEPROM.update(3, screw_pitch_e);
-    }
-    else {
-        int screw_pitch_e = EEPROM.read(3);
-    }
-    screw_pitch = screw_pitch_e /1000.0; //convert to in/rev
-    // initialize control rotary encoder variables
-
-
-    //initialize the LCD screen
+    read_eeprom();
+    screw_pitch = int_screw_pitch /1000.0; //convert to in/rev
 
     // initialize the mode pushbuttons as inputs:
     for (int val : mode_buttons) {
@@ -569,10 +679,8 @@ void setup() {
     for (int val : other_buttons) {
         pinMode(val, INPUT_PULLUP);
     }
-    control_last_state_a = digitalRead(control_rotary_a);
 
-    //initialize the onboard LED matrix
-    matrix.begin();
+    //initialize the LCD screen
     lcd.init();  // initialize the lcd
     lcd.backlight();
     lcd_print();
@@ -587,6 +695,9 @@ void loop(){
     if (direction == 0) {
         mode = read_mode(mode);
         if (mode != last_mode) {
+            if (last_mode == "settings"){
+                write_eeprom();
+            }
             last_mode = mode;
             mode_change = 1;
         }
@@ -610,7 +721,7 @@ void loop(){
         man_move();
     }
     else if (mode == "settings") {
-        Serial.println(" Settings Mode");
+        menu();
     }
 
     // Direction selection
@@ -620,26 +731,5 @@ void loop(){
         rpm = read_spindle_speed();
         lcd_print();
     }
-    if (direction == -1) {
-        matrix_array[7][9] = 1;
-        matrix_array[7][10] = 0;
-        matrix_array[7][11] = 0;
-        //move left
-    }
-    else if (direction == 1) {
-        matrix_array[7][9] = 0;
-        matrix_array[7][10] = 0;
-        matrix_array[7][11] = 1;
-        //move right
-    }
-    else {
-        matrix_array[7][9] = 0;
-        matrix_array[7][10] = 1;
-        matrix_array[7][11] = 0;
-        //no direction selected
-    }
-
-    // Write to matrix
-    matrix.renderBitmap(matrix_array, 8, 12);
 }
 
