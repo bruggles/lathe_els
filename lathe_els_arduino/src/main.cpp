@@ -8,7 +8,7 @@ LiquidCrystal_I2C lcd(0x27, 30, 4);
 int rotary_steps_left;
 int rotary_steps_right;
 int rotary_steps;
-
+//#include <avr/interrupt.h>
 String mode = "feed";
 String last_mode = "feed";
 
@@ -46,14 +46,16 @@ int control_pos = 0;
 int control_value = 0;
 int last_control_value = 0;
 float feed_rate = 0.001;
+float steps_per_rot_ind = 0.0;
 float display_feed_rate = 0.001;
 //spindle speed rotary encoder pins
 const int spindle_rotary_a = 2; //2 and 3 support interrupts, which is necessary for accurate reading of the rotary encoder at high speeds. If you change these, make sure to change the interrupt settings in the code as well.
 const int spindle_rotary_b = 3;
-
 //stepper pins
 const int stepper_dir = 4;
 const int stepper_step = 5; //pwm pin, not sure if this is helpful or not, but it should work either way
+
+//ROTARY ENCODER CODE --------------------------------------------------
 
 const int mode_buttons[] = {
     feed_butt, 
@@ -91,6 +93,44 @@ void set_stepper_speed(int stepper_rpm, int direction = 0){
     int delete_me = 0;
 }
 
+const float feed_rates[] = {
+    0.0005,
+    0.0010,  
+    0.0015,
+    0.0020,
+    0.0030,
+    0.0040,
+    0.0050,
+    0.0060,
+    0.0080,
+    0.0100,
+    0.0120,
+    0.0150,
+    0.0200,
+    0.0250,
+    0.0300
+};
+
+const int feed_rates_int[] = {
+    50,
+    100,  
+    150,
+    200,
+    300,
+    400,
+    500,
+    600,
+    800,
+    1000,
+    1200,
+    1500,
+    2000,
+    2500,
+    3000
+};
+int feed_rate_key = 4;
+int max_feed_rate = 14;
+
 const float in_threads[] = {
     0.02381,  //42 TPI
     0.02500,  //40 TPI
@@ -122,6 +162,39 @@ const float in_threads[] = {
     0.22222,  //4.5 TPI
     0.25000,  //4 TPI
 };
+
+const int in_threads_int[] = {
+    2381,  //42 TPI
+    2500,  //40 TPI
+    2632,  //38 TPI
+    2778,  //36 TPI
+    2941,  //34 TPI
+    3125,  //32 TPI
+    3333,  //30 TPI
+    3571,  //28 TPI
+    3846,  //26 TPI
+    4167,  //24 TPI
+    4545,  //22 TPI
+    5000,  //20 TPI
+    5556,  //18 TPI
+    6250,  //16 TPI
+    6667,  //15 TPI
+    7143,  //14 TPI
+    7692,  //13 TPI
+    8333,  //12 TPI
+    8696,  //11.5 TPI
+    9091,  //11 TPI
+    10000,  //10 TPI
+    11111,  //9 TPI
+    12500,  //8 TPI
+    14286,  //7 TPI
+    16667,  //6 TPI
+    18182,  //5.5 TPI
+    20000,  //5 TPI
+    22222,  //4.5 TPI
+    25000,  //4 TPI
+};
+
 int in_thread_key = 11;
 int max_in_threads = 28;
 
@@ -148,8 +221,34 @@ const float met_threads[] = {
     6.5,
     7.0
 };
+
+const int met_threads_in_int[] = {
+    1575,
+    1969,
+    2756,
+    2953,
+    3150,
+    3543,
+    3937,
+    4921,
+    5906,
+    6890,
+    7874,
+    9843,
+    11811,
+    13780,
+    15748,
+    17717,
+    19685,
+    21654,
+    23622,
+    25591,
+    27559
+};
 int met_thread_key = 7;
 int max_met_threads = 20;
+
+
 
 const float man_feed_rates[] = {
     0.0005,
@@ -158,6 +257,15 @@ const float man_feed_rates[] = {
     0.010,
     0.050,
     0.100,
+};
+
+const int man_feed_rates_int[] = {
+    50,
+    100,
+    500,
+    1000,
+    5000,
+    10000
 };
 int man_feed_key = 1;
 int max_man_feed_key = 5;
@@ -173,12 +281,14 @@ int int_default_units;
 String default_units;
 int int_stepper_ratio;
 int int_rot_enc_steps_hund;
+int click_mult = 0;
+int int_stepper_steps_hund = 4;
 //const String menu_items[] = {"Default Units", "Screw Pitch", "Reverse Direction"};
 const char* du_options[] = {"IN","MM","CM"};
 const char* sp_options[] = {"float_div_thou"};
-const char* rd_options[] = {"T","F"};
-const char* sr_options[] = {"int"};
-const char* ir_options[] = {"int_mult_hundred"};
+const char* tf[] = {"T","F"};
+const char* int_val[] = {"int"};
+const char* int_hund_val[] = {"int_mult_hundred"};
 
 struct MenuVars {
   const char* title;
@@ -194,9 +304,10 @@ MenuVars menu_vars[] = {
     //{"Title", $variable_to_change, {options}, max_index_of_options}
     {"Default Units", &int_default_units, du_options, 2, 0, 0, 0},
     {"Screw Pitch", &int_screw_pitch, sp_options, 250, 100, 1, 1},   
-    {"Reverse Screw", &int_reverse_feed, rd_options, 1, 1, 2, 2},  
-    {"Step Ratio", &int_stepper_ratio, sr_options, 100, 5, 3, 3},
-    {"Encode Steps", &int_rot_enc_steps_hund, ir_options, 20, 6, 4, 4}
+    {"Reverse Screw", &int_reverse_feed, tf, 1, 1, 2, 2},  
+    {"Step Ratio", &int_stepper_ratio, int_val, 100, 5, 3, 3},
+    {"Step Steps", &int_stepper_steps_hund, int_hund_val, 40, 4, 5, 5},
+    {"Encode Steps", &int_rot_enc_steps_hund, int_hund_val, 20, 6, 4, 4}
 };
 
 int menu_key = 0;
@@ -259,32 +370,8 @@ String read_mode(String last_mode){
     return md;
 }
 
-// int control_rotary_read(){
-//     int current_state_a = digitalRead(control_rotary_a);
-//     int movement = 0;
-//     if (current_state_a != control_last_state_a) {
-//         if (digitalRead(control_rotary_b) != current_state_a) {
-//             movement = 1;
-//         }
-//         else {
-//             movement = -1;
-//         }
-//     }
-//     control_last_state_a = current_state_a;
-//     return movement;
-//     delay(50);
-// }
-
-//int rotary_step_read(int steps, int &position, int &last_step, int &value){
 void delayed_read_dir(int &value, int mili_delay = 50){
-    //This function reads the rotary encoder and converts the readings into output values. It can change what size the step is before the output changes.
-    //Step is how many clicks create one change in output
-    //position is where the encoder is now - this tracks changes between steps
-    //last_state_a is to track when the state has changed
-    //last_step is the value when the last step was hit - used to calculate when the steps have been hit
-    //value is the output value
     int movement = read_dir(l_move,r_move);
-    //control_rotary_read();
     value += movement;
     
     delay(mili_delay);
@@ -412,10 +499,81 @@ int calculate_stepper_rpm(){
     return (feed_rate * rpm) / screw_pitch;
 }
 
+//ROTARY ENCODER CODE --------------------------------------------------
+volatile byte aFlag = 0; // let's us know when we're expecting a rising edge on pinA to signal that the encoder has arrived at a detent
+volatile byte bFlag = 0; // let's us know when we're expecting a rising edge on pinB to signal that the encoder has arrived at a detent (opposite direction to when aFlag is set)
+volatile byte encoderPos = 0; //this variable stores our current value of encoder position. Change to int or uin16_t instead of byte if you want to record a larger range than 0-255
+volatile byte oldEncPos = 0; //stores the last encoder position value so we can compare to the current reading and see if it has changed (so we know when to print to the serial monitor)
+volatile byte a = 0; //somewhere to store the direct values we read from our interrupt pins before checking to see if we have moved a whole detent
+volatile byte b = 0;
+
+static R_PORT0_Type * const port_table[] = { R_PORT0, R_PORT1, R_PORT2, R_PORT3, R_PORT4, R_PORT5, R_PORT6, R_PORT7 };
+
+static const uint16_t mask_table[] = { 1 << 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4, 1 << 5, 1 << 6, 1 << 7,
+                                       1 << 8, 1 << 9, 1 << 10, 1 << 11, 1 << 12, 1 << 13, 1 << 14, 1 << 15 };
+
+static inline uint16_t digitalReadFast(pin_size_t pin) {
+  uint16_t hardware_port_pin = g_pin_cfg[pin].pin;
+  uint16_t pin_mask = mask_table[hardware_port_pin & 0xf];
+  R_PORT0_Type * const portX = port_table[hardware_port_pin >> 8];
+
+  return (portX->PIDR & pin_mask);
+}
+
+void PinA(){
+  noInterrupts(); //stop interrupts happening before we read pin values
+  //reading = PIND & 0xC; // read all eight pin values then strip away all but pinA and pinB's values
+  a = digitalReadFast(spindle_rotary_a);
+  b = digitalReadFast(spindle_rotary_b); 
+  if(a && b && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
+      move_stepper(1,0,1); 
+      bFlag = 0;
+      aFlag = 0;
+  }
+  else if (a){
+      bFlag = 1;
+  }
+
+  //  bFlag = 0; //reset flags for the next turn
+  //  aFlag = 0; //reset flags for the next turn
+  //}
+  //else if (reading == B00000100) bFlag = 1; //signal that we're expecting pinB to signal the transition to detent from free rotation
+  interrupts(); //restart interrupts
+}
+
+void PinB(){
+  noInterrupts(); //stop interrupts happening before we read pin values
+  //reading = PIND & 0xC; //read all eight pin values then strip away all but pinA and pinB's values
+  //if (reading == B00001100 && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
+    //encoderPos ++; //increment the encoder's position count
+  //  bFlag = 0; //reset flags for the next turn
+  //  aFlag = 0; //reset flags for the next turn
+  //}
+  //else if (reading == B00001000) aFlag = 1; //signal that we're expecting pinA to signal the transition to detent from free rotation
+  a = digitalReadFast(spindle_rotary_a);
+  b = digitalReadFast(spindle_rotary_b); 
+  if(a && b && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
+      move_stepper(1,0,-1); 
+      bFlag = 0;
+      aFlag = 0;
+  }
+  else if (b){
+      aFlag = 1;
+  }
+  interrupts(); //restart interrupts
+}
 
 
-void feed_rate_calc(int key_val, const float list_of_vals[] = {}){
+
+void feed_rate_calc(int key_val, const float list_of_vals[] = {}, const int list_of_ints[]){
     //calculate the feed rate based on the current mode and control value. In feed mode, the feed rate is directly proportional to the control value. In thread modes, the feed rate is determined by the selected thread pitch.
+    if (int_reverse_feed == 0){
+        int rev_dir = 1;
+    }
+    else {
+        int rev_dir = -1;
+    }
+    int rev_dir = 
     if (mode == "feed") {
         display_feed_rate = control_value * 0.001; //convert to in/rev
         feed_rate = display_feed_rate;
@@ -423,6 +581,10 @@ void feed_rate_calc(int key_val, const float list_of_vals[] = {}){
     else if (mode == "in_thread") {
         display_feed_rate = list_of_vals[key_val];
         feed_rate = display_feed_rate;
+        //dist_per_stepper_step = (int_screw_pitch/int_stepper_steps_hund);
+        //desired_dist_per_read = (list_of_ints[key_val]/(int_rot_enc_steps_hund * 100));
+        steps_per_rot_ind =  (rev_dir)*(list_of_ints[key_val]/(int_rot_enc_steps_hund * 100))/(int_screw_pitch/int_stepper_steps_hund);
+
     }
     else if (mode == "met_thread") {
         display_feed_rate = list_of_vals[key_val];
@@ -714,7 +876,10 @@ void setup() {
     lcd.init();  // initialize the lcd
     lcd.backlight();
     lcd_print();
-    
+    //Initialize rotary encoder interrupts
+    attachInterrupt(digitalPinToInterrupt(spindle_rotary_a),PinA,RISING); // set an interrupt on PinA, looking for a rising edge signal and executing the "PinA" Interrupt Service Routine (below)
+    attachInterrupt(digitalPinToInterrupt(spindle_rotary_b),PinB,RISING); // set an interrupt on PinB, looking for a rising edge signal and executing the "PinB" Interrupt Service Routine (below)
+
     Serial.begin(9600);
     
 }
@@ -762,6 +927,11 @@ void loop(){
         rpm = read_spindle_speed();
         lcd_print();
     }
+
+    //if(oldEncPos != encoderPos) {
+        //Serial.println(encoderPos);
+        //oldEncPos = encoderPos;
+    //}
 
 }
 
