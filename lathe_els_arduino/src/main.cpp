@@ -47,7 +47,7 @@ int control_pos = 0;
 int control_value = 0;
 int last_control_value = 0;
 float feed_rate = 0.001;
-float steps_per_rot_ind = 0.0;
+float steps_per_rot = 0.0;
 float display_feed_rate = 0.001;
 //spindle speed rotary encoder pins
 const int spindle_rotary_a = 2; //2 and 3 support interrupts, which is necessary for accurate reading of the rotary encoder at high speeds. If you change these, make sure to change the interrupt settings in the code as well.
@@ -55,8 +55,6 @@ const int spindle_rotary_b = 3;
 //stepper pins
 const int stepper_dir = 4;
 const int stepper_step = 5; //pwm pin, not sure if this is helpful or not, but it should work either way
-
-//ROTARY ENCODER CODE --------------------------------------------------
 
 const int mode_buttons[] = {
     feed_butt, 
@@ -533,8 +531,8 @@ void PinA(){
   b = digitalReadFast(spindle_rotary_b); 
   if(a && b && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
       //move_stepper(1,0); 
-      dest_steps ++; //steps_per_rot_ind*direction;
-      //Serial.println("dest_steps: "+String(dest_steps)+" steps_per_rot: "+String(steps_per_rot_ind)+" dir: "+String(direction));
+      dest_steps ++; //steps_per_rot*direction;
+      //Serial.println("dest_steps: "+String(dest_steps)+" steps_per_rot: "+String(steps_per_rot)+" dir: "+String(direction));
       bFlag = 0;
       aFlag = 0;
   }
@@ -562,7 +560,7 @@ void PinB(){
   b = digitalReadFast(spindle_rotary_b); 
   if(a && b && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
       //move_stepper(-1,0); 
-      dest_steps --; //= steps_per_rot_ind*direction;
+      dest_steps --; //= steps_per_rot*direction;
       //Serial.println("dest_steps: "+String(dest_steps));
       bFlag = 0;
       aFlag = 0;
@@ -577,18 +575,18 @@ void PinB(){
 
 void feed_rate_calc(int key_val, const float list_of_vals[], const int list_of_ints[]){
     //calculate the feed rate based on the current mode and control value. In feed mode, the feed rate is directly proportional to the control value. In thread modes, the feed rate is determined by the selected thread pitch.
-    int rev_dir;
+    float rev_dir;
     if (int_reverse_feed == 0){
-        rev_dir = 1;
+        rev_dir = -1.0;
     }
     else {
-        rev_dir = -1;
+        rev_dir = 1.0;
     }
     display_feed_rate = list_of_vals[key_val];
     //dist_per_stepper_step = (int_screw_pitch/int_stepper_steps_hund);
     //desired_dist_per_read = (list_of_ints[key_val]/(int_rot_enc_steps_hund * 100));
-    steps_per_rot_ind =  (rev_dir)*(list_of_ints[key_val]/(int_rot_enc_steps_hund * 100))/(int_screw_pitch/int_stepper_steps_hund);
-    //Serial.println("fc: val: ("+String(list_of_ints[key_val])+"/"+String(int_rot_enc_steps_hund)+"*100)/("+String(int_screw_pitch)+"/"+int_stepper_steps_hund+")");
+    steps_per_rot =  (rev_dir)*(static_cast< float >(list_of_ints[key_val])/(int_rot_enc_steps_hund * 100))/(int_screw_pitch/static_cast< float >(int_stepper_steps_hund));
+    Serial.println("fc: val: "+String(rev_dir)+"*("+String(list_of_ints[key_val])+"/"+String(int_rot_enc_steps_hund)+"*100)/("+String(int_screw_pitch)+"/"+int_stepper_steps_hund+") = " + String(steps_per_rot,4));
 }
 
 void set_clear_stops_dro(){
@@ -624,7 +622,7 @@ void set_clear_stops_dro(){
 void auto_move(int mili_delay, int max_val, int &key_val, const float list_of_vals[], const int list_of_int_vals[]){
     //move the lathe at the specified feed rate in the specified direction until a stop button is pressed or a stop limit switch is triggered. If in thread mode, also monitor the spindle speed and adjust the feed rate to maintain the correct thread pitch.
     if (direction == 0) {
-      //if(steps_per_rot_ind == 0){
+      //if(steps_per_rot == 0){
       //    feed_rate_calc(key_val, list_of_vals, list_of_int_vals);
       //}
         // stop all stepper movement
@@ -674,9 +672,9 @@ void auto_move(int mili_delay, int max_val, int &key_val, const float list_of_va
             //read speed
             
 
-            move_steps = int(dest_steps*steps_per_rot_ind*direction)-step_loc;
+            move_steps = int(dest_steps*steps_per_rot*direction)-step_loc;
             Serial.println("dest_steps: "+String(dest_steps)+" step_loc: "+String(step_loc)+" move_steps: "+String(move_steps));
-            Serial.println("dir: "+String(direction)+" steps_per_rot: "+String(steps_per_rot_ind));
+            Serial.println("dir: "+String(direction)+" steps_per_rot: "+String(steps_per_rot));
             move_stepper(move_steps, 50);
             rpm = read_spindle_speed();
             //set stepper speed and direction
