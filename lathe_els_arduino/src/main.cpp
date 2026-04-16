@@ -491,7 +491,7 @@ void move_stepper(int steps, int delay_time){
     }
     for(int x = 0; x <= abs(steps); x++){  //Loop the forward stepping enough times for motion to be visible
         digitalWrite(stepper_step,HIGH); //Trigger one step forward
-        delayMicroseconds(100);
+        delayMicroseconds(10);
         digitalWrite(stepper_step,LOW); //Pull step pin low so it can be triggered again
         delayMicroseconds(delay_time);
         
@@ -670,12 +670,13 @@ void auto_move(int mili_delay, int max_val, int &key_val, const float list_of_va
         else {
             //no rapid buttons pressed, use normal feed rate
             //read speed
-            
-
-            move_steps = int(dest_steps*steps_per_rot*direction)-step_loc;
-            Serial.println("dest_steps: "+String(dest_steps)+" step_loc: "+String(step_loc)+" move_steps: "+String(move_steps));
-            Serial.println("dir: "+String(direction)+" steps_per_rot: "+String(steps_per_rot));
-            move_stepper(move_steps, 50);
+            float new_steps_f = dest_steps*steps_per_rot*direction;
+            int new_steps = int(dest_steps*steps_per_rot*direction);
+            move_steps = new_steps-step_loc;
+            step_loc += move_steps;
+            //Serial.println("dest_steps: "+String(dest_steps)+" step_loc: "+String(step_loc)+" move_steps: "+String(move_steps)+" New steps int: "+String(new_steps)+" New steps float: "+String(new_steps_f));
+            //Serial.println("dir: "+String(direction)+" steps_per_rot: "+String(steps_per_rot));
+            move_stepper(move_steps, 10);
             rpm = read_spindle_speed();
             //set stepper speed and direction
             set_stepper_speed(rpm, direction);
@@ -866,6 +867,7 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(spindle_rotary_a),PinA,RISING); // set an interrupt on PinA, looking for a rising edge signal and executing the "PinA" Interrupt Service Routine (below)
     attachInterrupt(digitalPinToInterrupt(spindle_rotary_b),PinB,RISING); // set an interrupt on PinB, looking for a rising edge signal and executing the "PinB" Interrupt Service Routine (below)
     //interrupts();
+    feed_rate_calc(feed_rate_key, feed_rates, feed_rates_int);
     Serial.begin(9600);
     
 }
