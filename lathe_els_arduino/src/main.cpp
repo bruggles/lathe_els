@@ -5,42 +5,18 @@
 #include <LiquidCrystal_I2C.h>
 LiquidCrystal_I2C lcd(0x27, 30, 4);
 #include <EEPROM.h>
-int rotary_steps_left;
-int rotary_steps_right;
-int rotary_steps;
+//int rotary_steps_left;
+//int rotary_steps_right;
+//int rotary_steps;
 //#include <avr/interrupt.h>
+
+//initial state settings
 String mode = "feed";
+String last_feed_mode = "feed";
 String last_mode = "feed";
-
 int mode_change = 0;
-
 int direction = 0;
 int last_direction = 0;
-//#include <RotaryEncoder.h>
-
-//pin declarations
-//mode buttons
-const int feed_butt = A0;
-const int in_thread_butt = A1;
-const int met_thread_butt = A2;
-const int man_move_butt = A3;
-const int settings_butt = 6; //Note, don't use A4 or A5 for conflicts with the i2c - maybe better package for i2c could help or somehow explicitly not allowing those pins to interact
-//left and right digital stops
-const int l_stop_set_butt = 0; //if wired to a pysical switch as well this will serve as a physical stop button too.
-const int l_stop_clear_butt = 1; //serves as clear and rapid left
-const int r_stop_set_butt = 7; //if wired to a pysical switch as well this will serve as a physical stop button too.
-const int r_stop_clear_butt = 8; //serves as clear and rapid right
-//rapid and dro zero
-const int rapid = 6;
-const int dro_zero = 9;
-//direction selction
-const int l_dir = 10;
-const int r_dir = 11;
-//control rotary encoder pins and settings
-//const int control_rotary_a = 12;
-const int l_move = 12;
-//const int control_rotary_b = 13;
-const int r_move = 13;
 int control_pos = 0;
 //int control_last_state_a = 0; 
 //int control_last_step = 0; 
@@ -49,6 +25,33 @@ int last_control_value = 0;
 float feed_rate = 0.001;
 float steps_per_rot = 0.0;
 float display_feed_rate = 0.001;
+int step_loc = 0; //location of the stepper motor in steps
+float loc = 0; //location in inches
+int move_steps = 0;
+//#include <RotaryEncoder.h>
+
+//pin declarations
+//mode buttons
+const int feed_butt = A0;
+const int man_move_butt = A1;
+const int settings_butt = A2; //Note, don't use A4 or A5 for conflicts with the i2c - maybe better package for i2c could help or somehow explicitly not allowing those pins to interact
+//left and right digital stops
+const int l_stop_set_butt = 0; //if wired to a pysical switch as well this will serve as a physical stop button too.
+const int l_stop_clear_butt = 1; //serves as clear and rapid left
+const int r_stop_set_butt = 7; //if wired to a pysical switch as well this will serve as a physical stop button too.
+const int r_stop_clear_butt = 8; //serves as clear and rapid right
+//rapid and dro zero
+//const int rapid = 6;
+const int dro_zero = 9;
+//direction selction
+const int l_dir = 10;
+const int r_dir = 11;
+//manual move switch
+const int l_move = 12;
+const int r_move = 13;
+//menu navigation buttons
+const int menu_left_butt = A3;
+const int menu_right_butt = 6;
 //spindle speed rotary encoder pins
 const int spindle_rotary_a = 2; //2 and 3 support interrupts, which is necessary for accurate reading of the rotary encoder at high speeds. If you change these, make sure to change the interrupt settings in the code as well.
 const int spindle_rotary_b = 3;
@@ -58,8 +61,6 @@ const int stepper_step = 5; //pwm pin, not sure if this is helpful or not, but i
 
 const int mode_buttons[] = {
     feed_butt, 
-    in_thread_butt, 
-    met_thread_butt, 
     man_move_butt, 
     settings_butt 
 };
@@ -67,8 +68,8 @@ const int mode_buttons[] = {
 const int other_buttons[] = {
     l_dir,
     r_dir,
-    //control_rotary_a,
-    //control_rotary_b,
+    menu_left_butt, 
+    menu_right_butt, 
     l_move,
     r_move,
     l_stop_set_butt,
@@ -77,8 +78,7 @@ const int other_buttons[] = {
     r_stop_clear_butt,
     dro_zero,
     spindle_rotary_a,
-    spindle_rotary_b,
-    rapid
+    spindle_rotary_b
 };
 
 const int stepper_outputs[] = {
@@ -86,9 +86,7 @@ const int stepper_outputs[] = {
     stepper_step
 };
 
-int step_loc = 0; //location of the stepper motor in steps
-float loc = 0; //location in inches
-int move_steps = 0;
+
 
 void set_stepper_speed(int stepper_rpm, int direction = 0){
     //set the stepper motor speed based on the feed rate and spindle speed. This will involve calculating the appropriate delay between steps to achieve the desired feed rate at the current spindle speed.
@@ -281,6 +279,15 @@ float screw_pitch;
 int int_reverse_feed;
 int int_default_units;
 String default_units;
+//time variables
+unsigned long last_tm;
+const long refresh_delay = 1000;
+unsigned long now;
+unsigned long tm_past;
+//rpm calc variables
+int last_click_cnt = 0;
+//loc calc variables
+
 //int int_stepper_ratio;
 int int_rot_enc_steps_hund;
 int int_stepper_steps_hund;
@@ -346,19 +353,29 @@ String read_mode(String last_mode){
     for (int i = 0; i < 5; i++) {
         if (digitalRead(mode_buttons[i]) == LOW) {
             switch (i) {
-                case 0:
-                    md = "feed";
+                case 0: //feed mode button cycles through feed, in_thread, and met_thread modes
+                    if (last_mode == "feed" || last_mode == "in_thread" || last_mode == "met_thread") {
+                        if (last_mode == "feed") {
+                            md = "in_thread";
+                        }
+                        else if (last_mode == "in_thread") {
+                            md = "met_thread";
+                        }
+                        else if (last_mode == "met_thread") {
+                            md = "feed";
+                        }
+                        mode_change = 1;
+                        last_feed_mode = md;
+                    }
+                    else {
+                        md = last_feed_mode;
+                    }
+
                     break;
                 case 1:
-                    md = "in_thread";
-                    break;
-                case 2:
-                    md = "met_thread";
-                    break;
-                case 3:
                     md = "man_move";
                     break;
-                case 4:
+                case 2:
                     md = "settings";
                     break;
             }
@@ -372,7 +389,7 @@ String read_mode(String last_mode){
 }
 
 void delayed_read_dir(int &value, int mili_delay = 50){
-    int movement = read_dir(l_move,r_move);
+    int movement = read_dir(menu_left_butt,menu_right_butt);
     value += movement;
     
     delay(mili_delay);
@@ -400,6 +417,7 @@ String screen_mode(String mode){
     }
     return md;
 }
+
 String fill_string(String str, int length, String fill_char = " ", String side = "left"){
     if (side == "left"){
         while (str.length() < length) {
@@ -662,11 +680,11 @@ void auto_move(int mili_delay, int max_val, int &key_val, const float list_of_va
             Serial.println("Stop button pressed or stop limit reached. Stopping movement.");
         }
         //monitor rapid buttons (clear stop buttons)
-        else if (digitalRead(rapid) == LOW){
-            //Rapid Speed left
-            set_stepper_speed(rapid_rpm, direction);
-            Serial.println("Rapid button pressed. Use rapid_rpm speed");
-        }
+        // else if (digitalRead(rapid) == LOW){
+        //     //Rapid Speed left
+        //     set_stepper_speed(rapid_rpm, direction);
+        //     Serial.println("Rapid button pressed. Use rapid_rpm speed");
+        // }
         else {
             //no rapid buttons pressed, use normal feed rate
             //read speed
@@ -697,8 +715,13 @@ void man_move(){
               lcd_print();
           }
           //set click increments
-          if (digitalRead(man_move_butt) == LOW){
-              man_feed_key ++;
+          if (digitalRead(menu_right_butt) == LOW || digitalRead(menu_left_butt) == LOW ){
+              if (digitalRead(menu_left_butt) == LOW){
+                  man_feed_key --;
+              }
+              else {
+                  man_feed_key ++;
+              }
               if (man_feed_key > max_man_feed_key) {
                   man_feed_key = 0;
               }
@@ -818,7 +841,7 @@ void menu(){
         delay(100);
     }
     int next_key_value = *menu_vars[menu_key].variable;
-    rd_lr_clicks = read_dir(l_move,r_move);
+    rd_lr_clicks = read_dir(menu_left_butt,menu_right_butt);
     if (rd_lr_clicks != 0){
         Serial.println(String(rd_lr_clicks) + " original_value: " + String(next_key_value));
         next_key_value += rd_lr_clicks;
@@ -841,7 +864,6 @@ void menu(){
 
 }
 
-
 void setup() {
     //get stored variables from EEPROM
     read_eeprom();
@@ -859,6 +881,8 @@ void setup() {
     for (int val : stepper_outputs) {
         pinMode(val, OUTPUT);
     }
+    //
+    last_tm = millis();
     //initialize the LCD screen
     lcd.init();  // initialize the lcd
     lcd.backlight();
@@ -873,7 +897,17 @@ void setup() {
 }
 
 void loop(){
+    //update this stuff every second
+    now = millis();
+    if (now - last_tm >= refresh_delay || now < last_tm){
+        tm_past = now - last_tm;
+        //calculate rpm
+        rpm = ((dest_steps - last_click_cnt)/(int_rot_enc_steps_hund*100))/(tm_past/1000);
+        last_click_cnt = dest_steps;
+        //calculate distance moved
 
+        last_tm = now;
+    }
     
     // Mode selection
     if (direction == 0) {
